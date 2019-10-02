@@ -7,38 +7,63 @@ metadata:
       This is Thoth Graph Refresh CronJob CronJob, this template is meant to be used by Bots,
       but could also be used by humans...
     openshift.io/display-name: "Thoth: Graph Refresh Job"
-    version: 0.6.0
+    version: 0.7.1
     tags: thoth,graph-refresh,ai-stacks,aistacks,graph
     template.openshift.io/documentation-url: https://github.com/Thoth-Station/
     template.openshift.io/long-description: >
       This template defines resources needed to deploy Thoth Graph Refresh Job CronJob to OpenShift.
-    template.openshift.io/provider-display-name: Red Hat, Inc.
+    template.openshift.io/provider-display-name: "Red Hat, Inc."
   labels:
     template: graph-refresh-cronjob
     app: thoth
     component: graph-refresh
 
 parameters:
+  - description: Registry the ImageStream to be use lives in
+    displayName: ImageStream Registry
+    required: true
+    name: IMAGE_STREAM_REGISTRY
+    value: "docker-registry.default.svc:5000"
+
   - displayName: Suspend CronJob run
     description: Suspend CronJob run
     required: true
     name: THOTH_SUSPEND_JOB
     value: "true"
 
+  - description: Project the ImageStream to be use lives in
+    displayName: ImageStream Project
+    required: true
+    name: IMAGE_STREAM_NAMESPACE
+    # TODO adjust ansible role so that we dont need a default here
+    value: "thoth-infra-stage"
+
+  - description: Tag of the ImageStream to be use
+    displayName: ImageStream Tag
+    required: true
+    name: IMAGE_STREAM_TAG
+    value: "latest"
+
+  - description: Service account to be used.
+    displayName: Service account name.
+    required: true
+    name: SERVICE_ACCOUNT_NAME
+
 objects:
   - kind: CronJob
-    apiVersion: batch/v2alpha1
+    apiVersion: batch/v1beta1
     metadata:
       name: graph-refresh
       labels:
         app: thoth
         component: graph-refresh
     spec:
-      schedule: '0 * * * *'
+      schedule: "0 * * * *"
       suspend: ${{THOTH_SUSPEND_JOB}}
       concurrencyPolicy: Forbid
-      successfulJobsHistoryLimit: 4
+      successfulJobsHistoryLimit: 2
       failedJobsHistoryLimit: 4
+      startingDeadlineSeconds: 5000000
       jobTemplate:
         spec:
           template:
@@ -47,21 +72,25 @@ objects:
                 app: thoth
                 component: graph-refresh
             spec:
-              serviceAccountName: analyzer
+              serviceAccountName: "${SERVICE_ACCOUNT_NAME}"
               containers:
-                - image: graph-refresh-job
+                - image: "${IMAGE_STREAM_REGISTRY}/${IMAGE_STREAM_NAMESPACE}/graph-refresh-job:${IMAGE_STREAM_TAG}"
                   name: graph-refresh
                   env:
-                    - name: 'THOTH_SOLVER_OUTPUT'
+                    - name: "THOTH_SOLVER_OUTPUT"
                       # TODO: move these hardcoded of subgraph check api and solver output into cm
                       value: http://result-api/api/v1/solver-result
-                    - name: 'THOTH_SUBGRAPH_CHECK_API'
+                    - name: "THOTH_SUBGRAPH_CHECK_API"
                       value: http://result-api/api/v1/subgraph-check
+                    - name: "GRAPH_REFRESH_NO_SOLVERS"
+                      value: "0"
+                    - name: "GRAPH_REFRESH_NO_PACKAGE_ANALYZERS"
+                      value: "0"
                     - name: THOTH_GRAPH_REFRESH_EAGER_STOP
                       # Stop after N scheduled solver runs per new package-version.
                       value: "50"
                     - name: KUBERNETES_API_URL
-                      value: 'https://kubernetes.default.svc.cluster.local'
+                      value: "https://kubernetes.default.svc.cluster.local"
                     - name: KUBERNETES_VERIFY_TLS
                       value: "0"
                     - name: THOTH_MIDDLETIER_NAMESPACE
@@ -74,6 +103,11 @@ objects:
                         configMapKeyRef:
                           key: infra-namespace
                           name: thoth
+                    - name: THOTH_DEPLOYMENT_NAME
+                      valueFrom:
+                        configMapKeyRef:
+                          key: storage-bucket-name
+                          name: thoth
                     - name: RSYSLOG_HOST
                       valueFrom:
                       configMapKeyRef:
@@ -84,7 +118,7 @@ objects:
                       configMapKeyRef:
                         key: rsyslog-port
                         name: thoth
-                    - name: THOTH_METRICS_PUSHGATEWAY_URL
+                    - name: PROMETHEUS_PUSHGATEWAY_URL
                       valueFrom:
                         configMapKeyRef:
                           name: thoth
@@ -94,11 +128,35 @@ objects:
                         secretKeyRef:
                           name: thoth
                           key: sentry-dsn
+                    - name: KNOWLEDGE_GRAPH_HOST
+                      valueFrom:
+                        configMapKeyRef:
+                          key: postgresql-host
+                          name: thoth
+                    - name: KNOWLEDGE_GRAPH_PORT
+                      value: "5432"
+                    - name: KNOWLEDGE_GRAPH_SSL_DISABLED
+                      value: "1"
+                    - name: KNOWLEDGE_GRAPH_USER
+                      valueFrom:
+                        secretKeyRef:
+                          name: postgresql
+                          key: database-user
+                    - name: KNOWLEDGE_GRAPH_PASSWORD
+                      valueFrom:
+                        secretKeyRef:
+                          name: postgresql
+                          key: database-password
+                    - name: KNOWLEDGE_GRAPH_DATABASE
+                      valueFrom:
+                        secretKeyRef:
+                          name: postgresql
+                          key: database-name
                   resources:
                     requests:
-                      memory: "128Mi"
-                      cpu: "250m"
+                      memory: "256Mi"
+                      cpu: "500m"
                     limits:
-                      memory: "128Mi"
-                      cpu: "250m"
+                      memory: "256Mi"
+                      cpu: "500m"
               restartPolicy: OnFailure
